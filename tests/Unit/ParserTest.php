@@ -22,6 +22,16 @@ class TestUserSchema {
     public string $ignoredProperty = 'temp';
 }
 
+#[Table('test_private')]
+class PrivatePropertySchema
+{
+    #[Column(type: 'varchar', length: 255)]
+    private string $password;
+
+    #[Column(type: 'varchar', length: 255)]
+    protected string $apiKey;
+}
+
 class ParserTest extends TestCase
 {
     #[Test]
@@ -54,4 +64,17 @@ class ParserTest extends TestCase
         $this->assertStringContainsString('`id` INT NOT NULL AUTO_INCREMENT', $sql);
         $this->assertStringContainsString('PRIMARY KEY (`id`)', $sql);
     }
+
+    #[Test]
+    public function testSupportsPrivateProperties(): void
+    {
+        $parser = new SchemaParser(new MySqlTypeNormalizer());
+
+        $def = $parser->parse(PrivatePropertySchema::class);
+
+        $this->assertCount(2, $def->columns);
+        $this->assertEquals('password', $def->columns['password']->name);
+        $this->assertEquals('varchar(255)', $def->columns['password']->sqlType);
+    }
+
 }

@@ -132,14 +132,6 @@ class SchemaParser
     }
 
     /**
-     * Get all public properties that should be considered for schema.
-     */
-    protected function getSchemaProperties(ReflectionClass $reflection): array
-    {
-        return $reflection->getProperties(ReflectionProperty::IS_PUBLIC);
-    }
-
-    /**
      * Build a column definition from a reflected property.
      */
     protected function buildColumnDefinition(ReflectionProperty $property): ?ColumnDefinition
@@ -379,5 +371,47 @@ class SchemaParser
                 'length' => $index->length,
             ]);
         }
+    }
+
+    /**
+     * Gets all properties that have schema-related attributes.
+     * Supports public, protected, and private properties.
+     *
+     * @param ReflectionClass $reflection
+     * @return array
+     */
+    protected function getSchemaProperties(ReflectionClass $reflection): array
+    {
+        $schemaProperties = [];
+        $allProperties = $reflection->getProperties();
+
+        foreach ($allProperties as $property) {
+            if ($this->hasSchemaAttribute($property)) {
+                $schemaProperties[] = $property;
+            }
+        }
+
+        return $schemaProperties;
+    }
+
+    /**
+     * Check if a property has any atlas schema attribute.
+     *
+     * @param ReflectionProperty $property
+     * @return bool
+     */
+    protected function hasSchemaAttribute(ReflectionProperty $property): bool
+    {
+        $attributes = $property->getAttributes();
+
+        foreach ($attributes as $attribute) {
+            $name = $attribute->getName();
+
+            if (str_starts_with($name, 'Atlas\\Attributes\\')) {
+                return true;
+            }
+        }
+
+        return false;
     }
 }
