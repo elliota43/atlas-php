@@ -8,6 +8,16 @@ use Atlas\Schema\Definition\TableDefinition;
 
 class MySqlGrammar
 {
+
+    protected $sqlKeywords = [
+      'NULL',
+      'TRUE',
+      'FALSE',
+      'CURRENT_TIMESTAMP',
+      'CURRENT_DATE',
+      'CURRENT_TIME',
+    ];
+
     public function createTable(TableDefinition $table): string
     {
         $lines = [];
@@ -218,16 +228,44 @@ class MySqlGrammar
     }
 
     /**
-     * Compile default value for column.
+     * Compiles a default value for SQL output.
+     * Handles NULL, Keywords, functions, and string literals.
+     *
+     * @param mixed $value
+     * @return string
      */
     protected function compileDefaultValue(mixed $value): string
     {
-        if (is_string($value) && strtoupper($value) === 'CURRENT_TIMESTAMP') {
-            return 'CURRENT_TIMESTAMP';
+        // handle php null
+        if ($value === null) {
+            return 'NULL';
+        }
+
+        // Handle numbers
+        if (is_int($value) || is_float($value)) {
+            return (string) $value;
+        }
+
+        if (is_bool($value)) {
+            return $value ? '1' : '0';
         }
 
         if (is_string($value)) {
-            return "'{$value}'";
+            $upper = strtoupper(trim($value));
+
+            // SQL keyword
+            if (in_array($upper, $this->sqlKeywords, true)) {
+                return $upper;
+            }
+
+            // function call
+            if (str_contains($value, '(')) {
+                return $value;
+            }
+
+            // escape if its a string literal
+            $escaped = str_replace("'", "''", $value);
+            return "'{$escaped}'";
         }
 
         return (string) $value;
