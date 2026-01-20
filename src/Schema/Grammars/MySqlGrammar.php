@@ -54,20 +54,52 @@ class MySqlGrammar
         $statements = [];
 
         foreach ($diff->removedColumns as $colName) {
-            $statements[] = "ALTER TABLE `{$diff->tableName}` DROP COLUMN `{$colName}`;";
+            $statements[] = $this->generateDropColumn($diff->tableName, $colName) . ';';
         }
 
         foreach ($diff->addedColumns as $column) {
-            $def = $this->compileColumn($column);
-            $statements[] = "ALTER TABLE `{$diff->tableName}` ADD COLUMN {$def};";
+            $statements[] = $this->generateAddColumn($diff->tableName, $column) . ';';
         }
 
         foreach ($diff->modifiedColumns as $column) {
-            $def = $this->compileColumn($column);
-            $statements[] = "ALTER TABLE `{$diff->tableName}` MODIFY COLUMN {$def};";
+            $statements[] = $this->generateModifyColumn($diff->tableName, $column) . ';';
         }
 
         return $statements;
+    }
+
+    /**
+     * Generate SQL to add a single column to a table.
+     */
+    public function generateAddColumn(string $tableName, ColumnDefinition $column): string
+    {
+        $def = $this->compileColumn($column);
+        return "ALTER TABLE `{$tableName}` ADD COLUMN {$def}";
+    }
+
+    /**
+     * Generate SQL to modify a single column in a table.
+     */
+    public function generateModifyColumn(string $tableName, ColumnDefinition $column): string
+    {
+        $def = $this->compileColumn($column);
+        return "ALTER TABLE `{$tableName}` MODIFY COLUMN {$def}";
+    }
+
+    /**
+     * Generate SQL to drop a single column from a table.
+     */
+    public function generateDropColumn(string $tableName, string $columnName): string
+    {
+        return "ALTER TABLE `{$tableName}` DROP COLUMN `{$columnName}`";
+    }
+
+    /**
+     * Generate preview query to show sample data from a column.
+     */
+    public function generatePreviewQuery(string $tableName, string $columnName, int $limit = 10): string
+    {
+        return "SELECT `{$columnName}` FROM `{$tableName}` WHERE `{$columnName}` IS NOT NULL LIMIT {$limit}";
     }
 
     public function compileColumn(ColumnDefinition $col): string
