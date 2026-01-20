@@ -4,8 +4,8 @@ namespace Tests\Unit;
 
 use PHPUnit\Framework\TestCase;
 use PHPUnit\Framework\Attributes\Test;
-use SchemaOps\Definition\ColumnDefinition;
-use SchemaOps\Definition\TableDefinition;
+use SchemaOps\Schema\Definition\ColumnDefinition;
+use SchemaOps\Schema\Definition\TableDefinition;
 use SchemaOps\State\LockfileManager;
 
 class LockfileManagerTest extends TestCase

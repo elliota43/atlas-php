@@ -5,12 +5,12 @@ namespace Tests\Integration;
 use PDO;
 use PHPUnit\Framework\TestCase;
 use PHPUnit\Framework\Attributes\Test;
-use SchemaOps\Attribute\Column;
-use SchemaOps\Attribute\Table;
-use SchemaOps\Database\MySqlDriver;
-use SchemaOps\Diff\SchemaComparator;
-use SchemaOps\Generator\MySqlGenerator;
-use SchemaOps\Parser\SchemaParser;
+use SchemaOps\Attributes\Column;
+use SchemaOps\Attributes\Table;
+use SchemaOps\Comparison\TableComparator;
+use SchemaOps\Database\Drivers\MySqlDriver;
+use SchemaOps\Schema\Grammars\MySqlGrammar;
+use SchemaOps\Schema\Parser\SchemaParser;
 
 // Fixture: This matches the Docker DB 'legacy_users' table BUT has one extra column
 #[Table(name: 'legacy_users')]
@@ -66,7 +66,7 @@ class TriangulationTest extends TestCase
         $stateB = $parser->parse(TriangulationTarget::class);
 
         // 3. Compare
-        $comparator = new SchemaComparator();
+        $comparator = new TableComparator();
         $diff = $comparator->compare($stateA, $stateB);
 
         // 4. Assert Drift Detected
@@ -75,8 +75,8 @@ class TriangulationTest extends TestCase
         $this->assertEquals('github_handle', $diff->addedColumns[0]->name());
 
         // 5. Generate Fix
-        $generator = new MySqlGenerator();
-        $queries = $generator->generateAlter($diff);
+        $grammar = new MySqlGrammar();
+        $queries = $grammar->generateAlter($diff);
 
         // 6. Verify SQL
         $this->assertNotEmpty($queries);

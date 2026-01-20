@@ -4,9 +4,9 @@ namespace Tests\Unit;
 
 use PHPUnit\Framework\Attributes\Test;
 use PHPUnit\Framework\TestCase;
-use SchemaOps\Definition\ColumnDefinition;
-use SchemaOps\Definition\TableDefinition;
-use SchemaOps\Diff\SchemaComparator;
+use SchemaOps\Comparison\TableComparator;
+use SchemaOps\Schema\Definition\ColumnDefinition;
+use SchemaOps\Schema\Definition\TableDefinition;
 
 class ComparatorTest extends TestCase
 {
@@ -23,7 +23,7 @@ class ComparatorTest extends TestCase
         $desired->addColumn(new ColumnDefinition('status', 'varchar(50)', false, false, false, 'active')); // Changed Length
         $desired->addColumn(new ColumnDefinition('email', 'varchar(255)', false, false, false, null));     // Added
 
-        $comparator = new SchemaComparator();
+        $comparator = new TableComparator();
         $diff = $comparator->compare($current, $desired);
 
         $this->assertEquals('users', $diff->tableName);

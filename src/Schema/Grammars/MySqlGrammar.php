@@ -1,12 +1,12 @@
 <?php
 
-namespace SchemaOps\Generator;
+namespace SchemaOps\Schema\Grammars;
 
-use SchemaOps\Definition\ColumnDefinition;
-use SchemaOps\Definition\TableDefinition;
-use SchemaOps\Diff\TableDiff;
+use SchemaOps\Changes\TableChanges;
+use SchemaOps\Schema\Definition\ColumnDefinition;
+use SchemaOps\Schema\Definition\TableDefinition;
 
-class MySqlGenerator
+class MySqlGrammar
 {
     public function createTable(TableDefinition $table): string
     {
@@ -26,7 +26,7 @@ class MySqlGenerator
         return "CREATE TABLE `{$table->tableName}` (\n    {$body}\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;";
     }
 
-    public function generateAlter(TableDiff $diff): array
+    public function generateAlter(TableChanges $diff): array
     {
         $statements = [];
 

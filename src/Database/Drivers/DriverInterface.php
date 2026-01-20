@@ -1,8 +1,8 @@
 <?php
 
-namespace SchemaOps\Database;
+namespace SchemaOps\Database\Drivers;
 
-use SchemaOps\Definition\TableDefinition;
+use SchemaOps\Schema\Definition\TableDefinition;
 
 interface DriverInterface
 {

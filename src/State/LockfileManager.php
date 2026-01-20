@@ -2,8 +2,8 @@
 
 namespace SchemaOps\State;
 
-use SchemaOps\State;
-use SchemaOps\Definition\TableDefinition;
+use SchemaOps\Schema\Definition\ColumnDefinition;
+use SchemaOps\Schema\Definition\TableDefinition;
 
 class LockfileManager
 {
@@ -89,7 +89,7 @@ class LockfileManager
             $table = new TableDefinition($tableName);
 
             foreach ($tableData['columns'] as $colData) {
-                $table->addColumn(new \SchemaOps\Definition\ColumnDefinition(
+                $table->addColumn(new ColumnDefinition(
                     name: $colData['name'],
                     sqlType: $colData['type'],
                     isNullable: $colData['nullable'],

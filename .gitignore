@@ -8,3 +8,5 @@ vendor/
 .idea/
 
 .phpunit.result.cache
+
+AGENTS.md

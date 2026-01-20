@@ -5,7 +5,7 @@ namespace Tests\Integration;
 use PDO;
 use PHPUnit\Framework\TestCase;
 use PHPUnit\Framework\Attributes\Test;
-use SchemaOps\Database\MySqlDriver;
+use SchemaOps\Database\Drivers\MySqlDriver;
 
 class DatabaseIntrospectionTest extends TestCase
 {

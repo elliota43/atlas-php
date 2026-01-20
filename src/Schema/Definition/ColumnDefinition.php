@@ -1,6 +1,6 @@
 <?php
 
-namespace SchemaOps\Definition;
+namespace SchemaOps\Schema\Definition;
 
 class ColumnDefinition
 {

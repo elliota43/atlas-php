@@ -4,10 +4,10 @@ namespace Tests\Unit;
 
 use PHPUnit\Framework\Attributes\Test;
 use PHPUnit\Framework\TestCase;
-use SchemaOps\Attribute\Column;
-use SchemaOps\Attribute\Table;
-use SchemaOps\Generator\MySqlGenerator;
-use SchemaOps\Parser\SchemaParser;
+use SchemaOps\Attributes\Column;
+use SchemaOps\Attributes\Table;
+use SchemaOps\Schema\Grammars\MySqlGrammar;
+use SchemaOps\Schema\Parser\SchemaParser;
 
 // Fixture Class for Testing
 #[Table(name: 'users')]
@@ -46,8 +46,8 @@ class ParserTest extends TestCase
         $parser = new SchemaParser();
         $def = $parser->parse(TestUserSchema::class);
 
-        $generator = new MySqlGenerator();
-        $sql = $generator->createTable($def);
+        $grammar = new MySqlGrammar();
+        $sql = $grammar->createTable($def);
 
         $this->assertStringContainsString('CREATE TABLE `users`', $sql);
         $this->assertStringContainsString('`id` INTEGER NOT NULL AUTO_INCREMENT', $sql);
