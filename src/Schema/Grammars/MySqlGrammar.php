@@ -69,6 +69,10 @@ class MySqlGrammar
 
     private function getPrimaryKeys(TableDefinition $table): array
     {
+        if ($table->compositePrimaryKey !== null) {
+            return $table->compositePrimaryKey;
+        }
+        
         $pks = [];
         foreach ($table->columns as $col) {
             if ($col->isPrimaryKey()) {

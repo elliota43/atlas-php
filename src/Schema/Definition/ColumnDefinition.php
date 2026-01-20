@@ -10,7 +10,8 @@ class ColumnDefinition
         public bool $isNullable,
         public bool $isAutoIncrement,
         public bool $isPrimaryKey,
-        public mixed $defaultValue
+        public mixed $defaultValue,
+        public ?string $onUpdate = null,
     ) {}
 
     public function name(): string

@@ -10,7 +10,8 @@ class TableDefinition {
      */
     public function __construct(
         public string $tableName,
-        public array $columns = []
+        public array $columns = [],
+        public ?array $compositePrimaryKey = null,
     ) {}
 
     public function addColumn(ColumnDefinition $column): void

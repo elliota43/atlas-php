@@ -6,7 +6,12 @@ use ReflectionClass;
 use ReflectionProperty;
 use RuntimeException;
 use SchemaOps\Attributes\Column;
+use SchemaOps\Attributes\Id;
+use SchemaOps\Attributes\PrimaryKey;
+use SchemaOps\Attributes\SoftDeletes;
 use SchemaOps\Attributes\Table;
+use SchemaOps\Attributes\Timestamps;
+use SchemaOps\Attributes\Uuid;
 use SchemaOps\Schema\Definition\ColumnDefinition;
 use SchemaOps\Schema\Definition\TableDefinition;
 
@@ -63,13 +68,57 @@ class SchemaParser
     ): TableDefinition {
         $definition = new TableDefinition($tableAttribute->name);
 
+        $this->addConvenienceColumns($reflection, $definition);
+
         foreach ($this->getSchemaProperties($reflection) as $property) {
             if ($column = $this->buildColumnDefinition($property)) {
                 $definition->addColumn($column);
             }
         }
 
+        $this->addTimestampColumns($reflection, $definition);
+        
+        $this->handleCompositePrimaryKey($reflection, $definition);
+
         return $definition;
+    }
+
+    /**
+     * Checks for #[Id] / #[Uuid] columns, and adds them to the TableDefinition
+     * if it exists.
+     *
+     * @param ReflectionClass $reflection
+     * @param TableDefinition $definition
+     * @return void
+     */
+    protected function addConvenienceColumns(ReflectionClass $reflection, TableDefinition $definition): void
+    {
+        if ($id = $this->getAttribute($reflection, Id::class)) {
+            $definition->addColumn(($this->buildIdColumn($id)));
+        }
+
+        if ($uuid = $this->getAttribute($reflection, Uuid::class)) {
+            $definition->addColumn($this->buildUuidColumn($uuid));
+        }
+    }
+
+    /**
+     * Checks for #[Timestamps] / #[SoftDeletes] attributes, and adds them to the TableDefinition
+     * if they exist.
+     *
+     * @param ReflectionClass $reflection
+     * @param TableDefinition $definition
+     * @return void
+     */
+    protected function addTimestampColumns(ReflectionClass $reflection, TableDefinition $definition): void
+    {
+        if ($timestamps = $this->getAttribute($reflection, Timestamps::class)) {
+            $this->addCreatedUpdatedColumns($definition, $timestamps);
+        }
+
+        if ($softDeletes = $this->getAttribute($reflection, SoftDeletes::class)) {
+            $this->addSoftDeleteColumn($definition, $softDeletes);
+        }
     }
 
     /**
@@ -127,5 +176,110 @@ class SchemaParser
         }
 
         return $attribute->type;
+    }
+
+    /**
+     * Build #[Id] ColumnDefinition
+     * @param Id $attr
+     * @return ColumnDefinition
+     */
+    protected function buildIdColumn(Id $attr): ColumnDefinition
+    {
+        return new ColumnDefinition(
+            name: $attr->name,
+            sqlType: $attr->type,
+            isNullable: false,
+            isAutoIncrement: true,
+            isPrimaryKey: true,
+            defaultValue: null,
+            onUpdate: null
+        );
+    }
+
+    /**
+     * Build #[Uuid] ColumnDefinition.
+     * @param Uuid $attr
+     * @return ColumnDefinition
+     */
+    protected function buildUuidColumn(Uuid $attr): ColumnDefinition
+    {
+        return new ColumnDefinition(
+            name: $attr->name,
+            sqlType: 'char(36)',
+            isNullable: false,
+            isAutoIncrement: false,
+            isPrimaryKey: $attr->primaryKey,
+            defaultValue: null,
+            onUpdate: null
+        );
+    }
+
+    /**
+     * Adds created_at, updated_at ColumnDefinition to TableDefinition
+     * For the #[Timestamps] attribute.
+     *
+     * @param TableDefinition $definition
+     * @param Timestamps $attr
+     * @return void
+     */
+    protected function addCreatedUpdatedColumns(TableDefinition $definition, Timestamps $attr): void
+    {
+        $definition->addColumn(new ColumnDefinition(
+            name: $attr->createdAtColumn,
+            sqlType: 'timestamp',
+            isNullable: $attr->nullable,
+            isAutoIncrement: false,
+            isPrimaryKey: false,
+            defaultValue: 'CURRENT_TIMESTAMP',
+            onUpdate: null
+        ));
+
+        $definition->addColumn(new ColumnDefinition(
+            name: $attr->updatedAtColumn,
+            sqlType: 'timestamp',
+            isNullable: $attr->nullable,
+            isAutoIncrement: false,
+            isPrimaryKey: false,
+            defaultValue: 'CURRENT_TIMESTAMP',
+            onUpdate: 'CURRENT_TIMESTAMP'
+        ));
+    }
+
+    /**
+     * Add column for soft deletes to specified TableDefinition
+     * defaults to 'deleted_at'
+     * For #[SoftDeletes] attribute.
+     *
+     * @param TableDefinition $definition
+     * @param SoftDeletes $attr
+     * @return void
+     */
+    protected function addSoftDeleteColumn(TableDefinition $definition, SoftDeletes $attr): void
+    {
+        $definition->addColumn(new ColumnDefinition(
+            name: $attr->column,
+            sqlType: 'timestamp',
+            isNullable: true,
+            isAutoIncrement: false,
+            isPrimaryKey: false,
+            defaultValue: null,
+            onUpdate: null
+        ));
+    }
+
+    /**
+     * Handle composite primary key attribute.
+     *
+     * @param ReflectionClass $reflection
+     * @param TableDefinition $definition
+     * @return void
+     */
+    protected function handleCompositePrimaryKey(ReflectionClass $reflection, TableDefinition $definition): void
+    {
+        $pkAttr = $this->getAttribute($reflection, PrimaryKey::class);
+        
+        if ($pkAttr) {
+            $definition->compositePrimaryKey = $pkAttr->columns;
+        }
     }
 }
