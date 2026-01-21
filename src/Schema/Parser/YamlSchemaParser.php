@@ -75,7 +75,7 @@ final class YamlSchemaParser
      * @param string $yaml the YAML content to parse
      * @param string $sourceLabel A label for error messages (e.g., filename))
      * @return array<string, TableDefinition>
-     * @throws RuntimeException if the YAML is invalid or malformed.
+     * @throws SchemaException if the YAML is invalid or malformed.
      */
     public function parseString(string $yaml, string $sourceLabel = '<yaml>'): array
     {
@@ -91,7 +91,7 @@ final class YamlSchemaParser
      * @param string $yaml The YAML content to parse.
      * @param string $sourceLabel A label for error messages.
      * @return array The parsed YAML data.
-     * @throws RuntimeException if the YAML is invalid or not an array
+     * @throws SchemaException if the YAML is invalid or not an array
      */
     private function parseYaml(string $yaml, string $sourceLabel): array
     {
@@ -114,7 +114,7 @@ final class YamlSchemaParser
      * @param array $data The parsed YAML data.
      * @param string $sourceLabel A label for error messages
      * @return void
-     * @throws RuntimeException If the 'tables' key is missing or invalid.
+     * @throws SchemaException If the 'tables' key is missing or invalid.
      */
     private function ensureValidRootStructure(array $data, string $sourceLabel): void
     {
@@ -129,7 +129,7 @@ final class YamlSchemaParser
      * @param array $tables The tables array from YAML.
      * @param string $sourceLabel A label for error messages
      * @return array<string, TableDefinition> Table definitions keyed by table name
-     * @throws RuntimeException If any table definition is invalid
+     * @throws SchemaException If any table definition is invalid
      */
     private function parseTables(array $tables, string $sourceLabel): array
     {
@@ -151,7 +151,7 @@ final class YamlSchemaParser
      * @param mixed $tableName The table name to validate.
      * @param string $sourceLabel A label for error messages
      * @return void
-     * @throws RuntimeException If the table name is invalid
+     * @throws SchemaException If the table name is invalid
      */
     private function ensureValidTableName(mixed $tableName, string $sourceLabel): void
     {
@@ -167,7 +167,7 @@ final class YamlSchemaParser
      * @param mixed $tableData The table data to validate.
      * @param string $sourceLabel A label for error messages
      * @return void
-     * @throws RuntimeException If the table data is invalid
+     * @throws SchemaException If the table data is invalid
      */
     private function ensureValidTableData(string $tableName, mixed $tableData, string $sourceLabel): void
     {
@@ -182,7 +182,7 @@ final class YamlSchemaParser
      * @param string $tableName The name of the table
      * @param array $tableData The table's YAML data
      * @return TableDefinition The constructed table definition
-     * @throws RuntimeException if the table data is invalid
+     * @throws SchemaException if the table data is invalid
      */
     private function buildTableDefinition(string $tableName, array $tableData): TableDefinition
     {
@@ -202,7 +202,7 @@ final class YamlSchemaParser
      * @param array $tableData The table's YAML data
      * @param string $tableName The table name for error messages
      * @return void
-     * @throws RuntimeException If the primary key definition is invalid
+     * @throws SchemaException If the primary key definition is invalid
      */
     private function setPrimaryKey(TableDefinition $definition, array $tableData, string $tableName): void
     {
@@ -226,7 +226,7 @@ final class YamlSchemaParser
      * @param array $tableData The table's YAML data
      * @param string $tableName The table name for error messages
      * @return void
-     * @throws RuntimeException If any column definition is invalid
+     * @throws SchemaException If any column definition is invalid
      */
     private function setColumns(TableDefinition $definition, array $tableData, string $tableName): void
     {
@@ -250,7 +250,7 @@ final class YamlSchemaParser
      * @param  string  $tableName  The table name for error messages
      * @param  mixed  $columnName  The column name to validate
      * @return void
-     * @throws RuntimeException If the column name is invalid
+     * @throws SchemaException If the column name is invalid
      */
     private function ensureValidColumnName(string $tableName, mixed $columnName): void
     {
@@ -266,7 +266,7 @@ final class YamlSchemaParser
      * @param  string  $columnName  The column name for error messages
      * @param  mixed  $columnData  The column data to validate
      * @return void
-     * @throws RuntimeException If the column data is invalid
+     * @throws SchemaException If the column data is invalid
      */
     private function ensureValidColumnData(string $tableName, string $columnName, mixed $columnData): void
     {
@@ -282,7 +282,7 @@ final class YamlSchemaParser
      * @param  array  $tableData  The table's YAML data
      * @param  string  $tableName  The table name for error messages
      * @return void
-     * @throws RuntimeException If any index definition is invalid
+     * @throws SchemaException If any index definition is invalid
      */
     private function setIndexes(TableDefinition $definition, array $tableData, string $tableName): void
     {
@@ -310,7 +310,7 @@ final class YamlSchemaParser
      * @param  string  $columnName  The column name
      * @param  array  $columnData  The column's YAML data
      * @return ColumnDefinition The constructed column definition
-     * @throws RuntimeException If the column data is invalid
+     * @throws SchemaException If the column data is invalid
      */
     private function buildColumnDefinition(string $tableName, string $columnName, array $columnData): ColumnDefinition
     {
@@ -340,7 +340,7 @@ final class YamlSchemaParser
      * @param  string  $columnName  The column name for error messages
      * @param  array  $columnData  The column's YAML data
      * @return array The normalized foreign key definitions
-     * @throws RuntimeException If any foreign key definition is invalid
+     * @throws SchemaException If any foreign key definition is invalid
      */
     private function parseForeignKeys(string $tableName, string $columnName, array $columnData): array
     {
@@ -373,7 +373,7 @@ final class YamlSchemaParser
      * @param  string  $type  The base type (e.g., 'varchar', 'int', 'decimal')
      * @param  array  $columnData  The column's YAML data
      * @return string The complete SQL type string
-     * @throws RuntimeException If type parameters are invalid
+     * @throws SchemaException If type parameters are invalid
      */
     private function buildSqlType(string $type, array $columnData): string
     {
@@ -392,7 +392,7 @@ final class YamlSchemaParser
      * @param  string  $type  The base type
      * @param  array  $columnData  The column's YAML data
      * @return string The type with length applied if applicable
-     * @throws RuntimeException If the length is not an integer
+     * @throws SchemaException If the length is not an integer
      */
     private function applyLength(string $type, array $columnData): string
     {
@@ -418,7 +418,7 @@ final class YamlSchemaParser
      * @param  string  $type  The base type
      * @param  array  $columnData  The column's YAML data
      * @return string The type with precision/scale applied if applicable
-     * @throws RuntimeException If precision or scale are not integers
+     * @throws SchemaException If precision or scale are not integers
      */
     private function applyPrecision(string $sql, string $type, array $columnData): string
     {
@@ -474,7 +474,7 @@ final class YamlSchemaParser
      * @param  array  $foreignKey  The foreign key YAML data
      * @param  int  $i  The index of this foreign key in the list
      * @return array The normalized foreign key definition
-     * @throws RuntimeException If the foreign key definition is invalid
+     * @throws SchemaException If the foreign key definition is invalid
      */
     private function normalizeForeignKey(string $tableName, string $columnName, array $foreignKey, int $i): array
     {
@@ -499,7 +499,7 @@ final class YamlSchemaParser
      * @param  array  $index  The index YAML data
      * @param  int  $i  The index of this index in the list
      * @return array The normalized index definition
-     * @throws RuntimeException If the index definition is invalid
+     * @throws SchemaException If the index definition is invalid
      */
     private function normalizeIndex(string $tableName, array $index, int $i): array
     {
