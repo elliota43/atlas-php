@@ -23,18 +23,21 @@ final class MigrateCommandTest extends TestCase
         $this->pdo = $this->connectionManager->connection('default');
 
         $this->resetDatabase();
-
-        $command = new MigrateCommand($this->connectionManager);
-
-        $application = new Application();
-        $application->add($command);
-
-        $this->commandTester = new CommandTester($command);
+        $this->setupCommandTester();
     }
 
     protected function tearDown(): void
     {
         $this->resetDatabase();
+    }
+
+    protected function setupCommandTester(): void
+    {
+        $command = new MigrateCommand($this->connectionManager);
+        $application = new Application();
+        $application->add($command);
+
+        $this->commandTester = new CommandTester($command);
     }
 
     // ==========================================
@@ -52,10 +55,7 @@ final class MigrateCommandTest extends TestCase
             ],
         ]);
 
-        $this->commandTester->execute([
-            '--yaml-path' => $yamlPath,
-            '--force' => true,
-        ]);
+        $this->executeCommand(['--yaml-path' => $yamlPath, '--force' => true]);
 
         $this->assertTableExists('users');
         $this->assertColumnExists('users', 'id');
@@ -80,10 +80,7 @@ final class MigrateCommandTest extends TestCase
             ],
         ]);
 
-        $this->commandTester->execute([
-            '--yaml-path' => $yamlPath,
-            '--force' => true,
-        ]);
+        $this->executeCommand(['--yaml-path' => $yamlPath, '--force' => true]);
 
         $this->assertColumnExists('users', 'name');
         $this->assertCommandSucceeded();
@@ -104,10 +101,7 @@ final class MigrateCommandTest extends TestCase
             ],
         ]);
 
-        $this->commandTester->execute([
-            '--yaml-path' => $yamlPath,
-            '--force' => true,
-        ]);
+        $this->executeCommand(['--yaml-path' => $yamlPath, '--force' => true]);
 
         $this->assertColumnType('users', 'email', 'varchar(255)');
         $this->assertCommandSucceeded();
@@ -123,10 +117,7 @@ final class MigrateCommandTest extends TestCase
             ],
         ]);
 
-        $this->commandTester->execute([
-            '--yaml-path' => $yamlPath,
-            '--force' => true,
-        ]);
+        $this->executeCommand(['--yaml-path' => $yamlPath, '--force' => true]);
 
         $this->assertIndexExists('users', 'email');
         $this->assertCommandSucceeded();
@@ -155,10 +146,7 @@ final class MigrateCommandTest extends TestCase
             ],
         ]);
 
-        $this->commandTester->execute([
-            '--yaml-path' => $yamlPath,
-            '--force' => true,
-        ]);
+        $this->executeCommand(['--yaml-path' => $yamlPath, '--force' => true]);
 
         $this->assertTableExists('posts');
         $this->assertForeignKeyExists('posts', 'user_id');
@@ -192,10 +180,7 @@ final class MigrateCommandTest extends TestCase
             ],
         ]);
 
-        $this->commandTester->execute([
-            '--yaml-path' => $yamlPath,
-            '--force' => true,
-        ]);
+        $this->executeCommand(['--yaml-path' => $yamlPath, '--force' => true]);
 
         $this->assertTableExists('users');
         $this->assertTableExists('posts');
@@ -211,7 +196,7 @@ final class MigrateCommandTest extends TestCase
     {
         $phpPath = $this->getPhpFixturePath();
 
-        $this->commandTester->execute([
+        $this->executeCommand([
             '--path' => $phpPath,
             '--namespace' => 'Tests\\Fixtures\\Schemas',
             '--force' => true,
@@ -232,7 +217,7 @@ final class MigrateCommandTest extends TestCase
 
         $phpPath = $this->getPhpFixturePath();
 
-        $this->commandTester->execute([
+        $this->executeCommand([
             '--path' => $phpPath,
             '--namespace' => 'Tests\\Fixtures\\Schemas',
             '--force' => true,
@@ -256,7 +241,7 @@ final class MigrateCommandTest extends TestCase
 
         $phpPath = $this->getPhpFixturePath();
 
-        $this->commandTester->execute([
+        $this->executeCommand([
             '--path' => $phpPath,
             '--namespace' => 'Tests\\Fixtures\\Schemas',
             '--force' => true,
@@ -282,15 +267,15 @@ final class MigrateCommandTest extends TestCase
 
         $phpPath = $this->getPhpFixturePath();
 
-        $this->commandTester->execute([
+        $this->executeCommand([
             '--path' => $phpPath,
             '--yaml-path' => $yamlPath,
             '--namespace' => 'Tests\\Fixtures\\Schemas',
             '--force' => true,
         ]);
 
-        $this->assertTableExists('users');  // From PHP
-        $this->assertTableExists('posts');  // From YAML
+        $this->assertTableExists('users');
+        $this->assertTableExists('posts');
         $this->assertCommandSucceeded();
     }
 
@@ -308,14 +293,9 @@ final class MigrateCommandTest extends TestCase
             ],
         ]);
 
-        $this->commandTester->execute([
-            '--yaml-path' => $yamlPath,
-            '--dry-run' => true,
-        ]);
+        $this->executeCommand(['--yaml-path' => $yamlPath, '--dry-run' => true]);
 
-        $output = $this->commandTester->getDisplay();
-
-        $this->assertStringContainsString('CREATE TABLE', $output);
+        $this->assertStringContainsString('CREATE TABLE', $this->getOutput());
         $this->assertTableDoesNotExist('users');
         $this->assertCommandSucceeded();
     }
@@ -335,14 +315,9 @@ final class MigrateCommandTest extends TestCase
             ],
         ]);
 
-        $this->commandTester->execute([
-            '--yaml-path' => $yamlPath,
-            '--force' => true,
-        ]);
+        $this->executeCommand(['--yaml-path' => $yamlPath, '--force' => true]);
 
-        $output = $this->commandTester->getDisplay();
-
-        $this->assertStringContainsString('up to date', $output);
+        $this->assertStringContainsString('up to date', $this->getOutput());
         $this->assertCommandSucceeded();
     }
 
@@ -360,10 +335,7 @@ final class MigrateCommandTest extends TestCase
         ]);
 
         $this->commandTester->setInputs(['no']);
-
-        $this->commandTester->execute([
-            '--yaml-path' => $yamlPath,
-        ]);
+        $this->executeCommand(['--yaml-path' => $yamlPath]);
 
         $this->assertTableDoesNotExist('users');
     }
@@ -378,10 +350,7 @@ final class MigrateCommandTest extends TestCase
         ]);
 
         $this->commandTester->setInputs(['yes']);
-
-        $this->commandTester->execute([
-            '--yaml-path' => $yamlPath,
-        ]);
+        $this->executeCommand(['--yaml-path' => $yamlPath]);
 
         $this->assertTableExists('users');
         $this->assertCommandSucceeded();
@@ -394,18 +363,13 @@ final class MigrateCommandTest extends TestCase
     #[Test]
     public function it_displays_warning_when_no_schemas_found(): void
     {
-        $emptyPath = sys_get_temp_dir() . '/atlas_empty_' . uniqid();
-        mkdir($emptyPath);
+        $emptyPath = $this->createTemporaryDirectory();
 
-        $this->commandTester->execute([
-            '--yaml-path' => $emptyPath,
-        ]);
+        $this->executeCommand(['--yaml-path' => $emptyPath]);
 
-        $output = $this->commandTester->getDisplay();
+        $this->assertStringContainsString('No schema definitions found', $this->getOutput());
 
-        $this->assertStringContainsString('No schema definitions found', $output);
-
-        rmdir($emptyPath);
+        $this->removeDirectory($emptyPath);
     }
 
     #[Test]
@@ -414,12 +378,9 @@ final class MigrateCommandTest extends TestCase
         $yamlPath = $this->getYamlFixturePath();
         file_put_contents("{$yamlPath}/invalid.schema.yaml", "invalid: yaml: content: [");
 
-        $this->commandTester->execute([
-            '--yaml-path' => $yamlPath,
-            '--force' => true,
-        ]);
+        $this->executeCommand(['--yaml-path' => $yamlPath, '--force' => true]);
 
-        $this->assertEquals(1, $this->commandTester->getStatusCode());
+        $this->assertCommandFailed();
     }
 
     #[Test]
@@ -447,15 +408,10 @@ final class MigrateCommandTest extends TestCase
             ],
         ]);
 
-        $this->commandTester->execute([
-            '--yaml-path' => $yamlPath,
-            '--force' => true,
-        ]);
+        $this->executeCommand(['--yaml-path' => $yamlPath, '--force' => true]);
 
-        $output = $this->commandTester->getDisplay();
-
-        $this->assertStringContainsString('Duplicate table', $output);
-        $this->assertEquals(1, $this->commandTester->getStatusCode());
+        $this->assertStringContainsString('Duplicate table', $this->getOutput());
+        $this->assertCommandFailed();
     }
 
     // ==========================================
@@ -471,7 +427,7 @@ final class MigrateCommandTest extends TestCase
             ],
         ]);
 
-        $this->commandTester->execute([
+        $this->executeCommand([
             '--yaml-path' => $yamlPath,
             '--connection' => 'default',
             '--force' => true,
@@ -482,12 +438,26 @@ final class MigrateCommandTest extends TestCase
     }
 
     // ==========================================
-    // Helper Methods
+    // Helper Methods - Command Execution
+    // ==========================================
+
+    protected function executeCommand(array $options): void
+    {
+        $this->commandTester->execute($options);
+    }
+
+    protected function getOutput(): string
+    {
+        return $this->commandTester->getDisplay();
+    }
+
+    // ==========================================
+    // Helper Methods - Setup
     // ==========================================
 
     protected function createConnectionManager(): ConnectionManager
     {
-        $config = [
+        return new ConnectionManager([
             'default' => [
                 'driver' => 'mysql',
                 'host' => getenv('DB_HOST') ?: '127.0.0.1',
@@ -496,53 +466,79 @@ final class MigrateCommandTest extends TestCase
                 'username' => getenv('DB_USERNAME') ?: 'root',
                 'password' => getenv('DB_PASSWORD') ?: '',
             ],
-        ];
-
-        return new ConnectionManager($config);
+        ]);
     }
 
     protected function resetDatabase(): void
     {
-        $tables = $this->pdo->query("SHOW TABLES")->fetchAll(\PDO::FETCH_COLUMN);
+        $this->disableForeignKeyChecks();
+        $this->dropAllTables();
+        $this->enableForeignKeyChecks();
+        $this->cleanupYamlFixtures();
+    }
 
-        $this->pdo->exec("SET FOREIGN_KEY_CHECKS = 0");
+    protected function disableForeignKeyChecks(): void
+    {
+        $this->pdo->exec('SET FOREIGN_KEY_CHECKS = 0');
+    }
+
+    protected function enableForeignKeyChecks(): void
+    {
+        $this->pdo->exec('SET FOREIGN_KEY_CHECKS = 1');
+    }
+
+    protected function dropAllTables(): void
+    {
+        $tables = $this->pdo->query('SHOW TABLES')->fetchAll(\PDO::FETCH_COLUMN);
 
         foreach ($tables as $table) {
             $this->pdo->exec("DROP TABLE IF EXISTS `{$table}`");
         }
-
-        $this->pdo->exec("SET FOREIGN_KEY_CHECKS = 1");
-
-        $this->cleanupYamlFixtures();
     }
+
+    // ==========================================
+    // Helper Methods - Database Operations
+    // ==========================================
 
     protected function createTable(string $name, array $columns): void
     {
-        $columnSql = [];
-
-        foreach ($columns as $columnName => $definition) {
-            $columnSql[] = "`{$columnName}` {$definition}";
-        }
-
-        $sql = "CREATE TABLE `{$name}` (" . implode(', ', $columnSql) . ")";
+        $columnDefinitions = $this->buildColumnDefinitions($columns);
+        $sql = "CREATE TABLE `{$name}` ({$columnDefinitions})";
 
         $this->pdo->exec($sql);
     }
 
-    protected function getYamlFixturePath(): string
+    protected function buildColumnDefinitions(array $columns): string
     {
-        $path = sys_get_temp_dir() . '/atlas_yaml_fixtures_' . uniqid();
+        $definitions = [];
 
-        if (! is_dir($path)) {
-            mkdir($path, 0777, true);
+        foreach ($columns as $name => $definition) {
+            $definitions[] = "`{$name}` {$definition}";
         }
 
-        return $path;
+        return implode(', ', $definitions);
+    }
+
+    // ==========================================
+    // Helper Methods - YAML Fixtures
+    // ==========================================
+
+    protected function getYamlFixturePath(): string
+    {
+        return $this->createTemporaryDirectory('atlas_yaml_fixtures_');
     }
 
     protected function getPhpFixturePath(): string
     {
         return __DIR__ . '/../../Fixtures/Schemas';
+    }
+
+    protected function createTemporaryDirectory(string $prefix = 'atlas_test_'): string
+    {
+        $path = sys_get_temp_dir() . "/{$prefix}" . uniqid();
+        mkdir($path, 0777, true);
+
+        return $path;
     }
 
     protected function createYamlFixture(string $tableName, array $tableDefinition): string
@@ -573,11 +569,18 @@ final class MigrateCommandTest extends TestCase
 
     protected function cleanupYamlFixtures(): void
     {
+        $directories = $this->getYamlFixtureDirectories();
+
+        foreach ($directories as $directory) {
+            $this->removeDirectory($directory);
+        }
+    }
+
+    protected function getYamlFixtureDirectories(): array
+    {
         $pattern = sys_get_temp_dir() . '/atlas_yaml_fixtures_*';
 
-        foreach (glob($pattern) as $dir) {
-            $this->removeDirectory($dir);
-        }
+        return glob($pattern) ?: [];
     }
 
     protected function removeDirectory(string $path): void
@@ -586,7 +589,13 @@ final class MigrateCommandTest extends TestCase
             return;
         }
 
-        $files = array_diff(scandir($path), ['.', '..']);
+        $this->removeDirectoryContents($path);
+        rmdir($path);
+    }
+
+    protected function removeDirectoryContents(string $path): void
+    {
+        $files = $this->getDirectoryFiles($path);
 
         foreach ($files as $file) {
             $filePath = "{$path}/{$file}";
@@ -595,8 +604,11 @@ final class MigrateCommandTest extends TestCase
                 ? $this->removeDirectory($filePath)
                 : unlink($filePath);
         }
+    }
 
-        rmdir($path);
+    protected function getDirectoryFiles(string $path): array
+    {
+        return array_diff(scandir($path), ['.', '..']);
     }
 
     // ==========================================
@@ -606,6 +618,11 @@ final class MigrateCommandTest extends TestCase
     protected function assertCommandSucceeded(): void
     {
         $this->assertEquals(0, $this->commandTester->getStatusCode());
+    }
+
+    protected function assertCommandFailed(): void
+    {
+        $this->assertEquals(1, $this->commandTester->getStatusCode());
     }
 
     protected function assertTableExists(string $table): void
