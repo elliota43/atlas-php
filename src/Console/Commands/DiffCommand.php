@@ -2,664 +2,258 @@
 
 declare(strict_types=1);
 
-namespace Tests\Console\Commands;
+namespace Atlas\Console\Commands;
 
+use Atlas\Analysis\MySqlDestructiveChangeAnalyzer;
+use Atlas\Comparison\TableComparator;
 use Atlas\Connection\ConnectionManager;
-use Atlas\Console\Commands\MigrateCommand;
-use PHPUnit\Framework\Attributes\Test;
-use PHPUnit\Framework\TestCase;
-use Symfony\Component\Console\Application;
-use Symfony\Component\Console\Tester\CommandTester;
+use Atlas\Database\Drivers\MySqlDriver;
+use Atlas\Database\Drivers\MySqlTypeNormalizer;
+use Atlas\Schema\Discovery\ClassFinder;
+use Atlas\Schema\Discovery\YamlSchemaFinder;
+use Atlas\Schema\Grammars\MySqlGrammar;
+use Atlas\Schema\Parser\SchemaParser;
+use Atlas\Schema\Parser\YamlSchemaParser;
+use Atlas\Support\ProjectRootFinder;
+use Symfony\Component\Console\Command\Command;
+use Symfony\Component\Console\Input\InputInterface;
+use Symfony\Component\Console\Input\InputOption;
+use Symfony\Component\Console\Output\OutputInterface;
+use Symfony\Component\Console\Style\SymfonyStyle;
 
-final class MigrateCommandTest extends TestCase
+final class DiffCommand extends Command
 {
-    private CommandTester $commandTester;
-    private ConnectionManager $connectionManager;
-    private \PDO $pdo;
-
-    protected function setUp(): void
-    {
-        $this->connectionManager = $this->createConnectionManager();
-        $this->pdo = $this->connectionManager->connection('default');
-
-        $this->resetDatabase();
-
-        $command = new MigrateCommand($this->connectionManager);
-
-        $application = new Application();
-        $application->add($command);
-
-        $this->commandTester = new CommandTester($command);
+    public function __construct(
+        private ConnectionManager $connectionManager,
+    ) {
+        parent::__construct();
     }
 
-    protected function tearDown(): void
+    protected function configure(): void
     {
-        $this->resetDatabase();
+        $this
+            ->setName('diff')
+            ->setDescription('Generate SQL to migrate database to match schema definitions')
+            ->addOption('path', 'p', InputOption::VALUE_OPTIONAL, 'Path to scan for schema classes')
+            ->addOption('yaml-path', 'y', InputOption::VALUE_OPTIONAL, 'Path to scan for YAML schema files')
+            ->addOption('namespace', null, InputOption::VALUE_OPTIONAL, 'Namespace to scan for schema classes', 'App')
+            ->addOption('connection', 'c', InputOption::VALUE_OPTIONAL, 'Database connection name', 'default')
+            ->addOption('output', 'o', InputOption::VALUE_OPTIONAL, 'Output file path (optional)');
     }
 
-    // ==========================================
-    // YAML Configuration Tests
-    // ==========================================
-
-    #[Test]
-    public function it_creates_table_from_yaml_schema(): void
+    protected function execute(InputInterface $input, OutputInterface $output): int
     {
-        $yamlPath = $this->createYamlFixture('users', [
-            'columns' => [
-                'id' => ['type' => 'bigint', 'unsigned' => true, 'auto_increment' => true, 'primary' => true],
-                'email' => ['type' => 'varchar', 'length' => 255, 'nullable' => false],
-                'name' => ['type' => 'varchar', 'length' => 255, 'nullable' => false],
-            ],
-        ]);
+        $io = new SymfonyStyle($input, $output);
 
-        $this->commandTester->execute([
-            '--yaml-path' => $yamlPath,
-            '--force' => true,
-        ]);
+        try {
+            $connectionName = $input->getOption('connection');
+            $pdo = $this->connectionManager->connection($connectionName);
+            $driver = new MySqlDriver($pdo);
+            $normalizer = new MySqlTypeNormalizer();
+            $parser = new SchemaParser($normalizer);
+            $analyzer = new MySqlDestructiveChangeAnalyzer();
+            $grammar = new MySqlGrammar();
 
-        $this->assertTableExists('users');
-        $this->assertColumnExists('users', 'id');
-        $this->assertColumnExists('users', 'email');
-        $this->assertColumnExists('users', 'name');
-        $this->assertCommandSucceeded();
+            // Discover schemas
+            $io->section('Discovering Schemas');
+            $codeSchemas = $this->discoverSchemas($input, $io, $parser, $normalizer);
+
+            if (empty($codeSchemas)) {
+                $io->warning('No schema definitions found.');
+                return Command::SUCCESS;
+            }
+
+            $io->note(sprintf('Found %d table definition(s)', count($codeSchemas)));
+
+            // Introspect database
+            $io->section('Introspecting Database');
+            $dbSchemas = $driver->getCurrentSchema();
+            $io->text(sprintf('Found %d existing table(s) in database', count($dbSchemas)));
+
+            // Compare and detect changes
+            $changes = $this->detectChanges($codeSchemas, $dbSchemas, $analyzer);
+
+            if ($this->noChangesDetected($changes)) {
+                $io->success('Database schema is up to date!');
+                return Command::SUCCESS;
+            }
+
+            // Generate SQL
+            $sql = $this->generateMigrationSql($changes, $grammar);
+
+            $this->displayResults($io, $sql, $input);
+
+            return Command::SUCCESS;
+
+        } catch (\Exception $e) {
+            $io->error($e->getMessage());
+            return Command::FAILURE;
+        }
     }
 
-    #[Test]
-    public function it_adds_column_from_yaml_schema(): void
-    {
-        $this->createTable('users', [
-            'id' => 'BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY',
-            'email' => 'VARCHAR(255) NOT NULL',
-        ]);
+    protected function discoverSchemas(
+        InputInterface $input,
+        SymfonyStyle $io,
+        SchemaParser $parser,
+        MySqlTypeNormalizer $normalizer
+    ): array {
+        $yamlPath = $input->getOption('yaml-path');
+        $phpPath = $input->getOption('path');
 
-        $yamlPath = $this->createYamlFixture('users', [
-            'columns' => [
-                'id' => ['type' => 'bigint', 'unsigned' => true, 'auto_increment' => true, 'primary' => true],
-                'email' => ['type' => 'varchar', 'length' => 255, 'nullable' => false],
-                'name' => ['type' => 'varchar', 'length' => 255, 'nullable' => false],
-            ],
-        ]);
+        $schemas = [];
 
-        $this->commandTester->execute([
-            '--yaml-path' => $yamlPath,
-            '--force' => true,
-        ]);
+        // Auto-discover from project root if no paths specified
+        if ($yamlPath === null && $phpPath === null) {
+            $projectRoot = ProjectRootFinder::find();
+            if ($projectRoot !== null) {
+                $io->note("Scanning project root: {$projectRoot}");
+                $phpPath = $projectRoot;
+                $yamlPath = $projectRoot;
+            }
+        }
 
-        $this->assertColumnExists('users', 'name');
-        $this->assertCommandSucceeded();
+        // Discover YAML schemas
+        if ($yamlPath) {
+            $io->text("Scanning YAML path: {$yamlPath}");
+            $yamlSchemas = $this->discoverYamlSchemas($yamlPath, $normalizer);
+            foreach ($yamlSchemas as $tableName => $definition) {
+                $schemas[$tableName] = $definition;
+                $io->text("  ✓ Loaded YAML: {$tableName}");
+            }
+        }
+
+        // Discover PHP schemas
+        if ($phpPath) {
+            $io->text("Scanning PHP path: {$phpPath}");
+            $finder = new ClassFinder();
+            $schemaClasses = $finder->findInDirectory($phpPath);
+
+            foreach ($schemaClasses as $class) {
+                $definition = $parser->parse($class);
+                $schemas[$definition->tableName] = $definition;
+                $io->text("  ✓ Parsed PHP: {$class}");
+            }
+        }
+
+        return $schemas;
     }
 
-    #[Test]
-    public function it_modifies_column_from_yaml_schema(): void
+    protected function discoverYamlSchemas(string $path, MySqlTypeNormalizer $normalizer): array
     {
-        $this->createTable('users', [
-            'id' => 'BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY',
-            'email' => 'VARCHAR(100) NOT NULL',
-        ]);
+        $yamlParser = new YamlSchemaParser($normalizer);
+        $finder = new YamlSchemaFinder();
 
-        $yamlPath = $this->createYamlFixture('users', [
-            'columns' => [
-                'id' => ['type' => 'bigint', 'unsigned' => true, 'auto_increment' => true, 'primary' => true],
-                'email' => ['type' => 'varchar', 'length' => 255, 'nullable' => false],
-            ],
-        ]);
+        $files = $finder->findInDirectory($path);
+        $schemas = [];
 
-        $this->commandTester->execute([
-            '--yaml-path' => $yamlPath,
-            '--force' => true,
-        ]);
+        foreach ($files as $file) {
+            $parsed = $yamlParser->parseFile($file);
+            foreach ($parsed as $tableName => $definition) {
+                if (isset($schemas[$tableName])) {
+                    throw new \Atlas\Exceptions\SchemaException(
+                        "Duplicate table definition: {$tableName}"
+                    );
+                }
+                $schemas[$tableName] = $definition;
+            }
+        }
 
-        $this->assertColumnType('users', 'email', 'varchar(255)');
-        $this->assertCommandSucceeded();
+        return $schemas;
     }
 
-    #[Test]
-    public function it_creates_index_from_yaml_schema(): void
+    protected function detectChanges(array $codeSchemas, array $dbSchemas, $analyzer): array
     {
-        $yamlPath = $this->createYamlFixture('users', [
-            'columns' => [
-                'id' => ['type' => 'bigint', 'unsigned' => true, 'auto_increment' => true, 'primary' => true],
-                'email' => ['type' => 'varchar', 'length' => 255, 'nullable' => false, 'unique' => true],
-            ],
-        ]);
-
-        $this->commandTester->execute([
-            '--yaml-path' => $yamlPath,
-            '--force' => true,
-        ]);
-
-        $this->assertIndexExists('users', 'email');
-        $this->assertCommandSucceeded();
-    }
-
-    #[Test]
-    public function it_creates_foreign_key_from_yaml_schema(): void
-    {
-        $this->createTable('users', [
-            'id' => 'BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY',
-        ]);
-
-        $yamlPath = $this->createYamlFixture('posts', [
-            'columns' => [
-                'id' => ['type' => 'bigint', 'unsigned' => true, 'auto_increment' => true, 'primary' => true],
-                'user_id' => [
-                    'type' => 'bigint',
-                    'unsigned' => true,
-                    'nullable' => false,
-                    'foreign_key' => [
-                        'table' => 'users',
-                        'column' => 'id',
-                        'on_delete' => 'cascade',
-                    ],
-                ],
-            ],
-        ]);
-
-        $this->commandTester->execute([
-            '--yaml-path' => $yamlPath,
-            '--force' => true,
-        ]);
-
-        $this->assertTableExists('posts');
-        $this->assertForeignKeyExists('posts', 'user_id');
-        $this->assertCommandSucceeded();
-    }
-
-    #[Test]
-    public function it_discovers_multiple_yaml_files(): void
-    {
-        $yamlPath = $this->getYamlFixturePath();
-
-        $this->createYamlFixtureFile($yamlPath, 'users.schema.yaml', [
-            'tables' => [
-                'users' => [
-                    'columns' => [
-                        'id' => ['type' => 'bigint', 'unsigned' => true, 'auto_increment' => true, 'primary' => true],
-                        'email' => ['type' => 'varchar', 'length' => 255],
-                    ],
-                ],
-            ],
-        ]);
-
-        $this->createYamlFixtureFile($yamlPath, 'posts.schema.yaml', [
-            'tables' => [
-                'posts' => [
-                    'columns' => [
-                        'id' => ['type' => 'bigint', 'unsigned' => true, 'auto_increment' => true, 'primary' => true],
-                        'title' => ['type' => 'varchar', 'length' => 255],
-                    ],
-                ],
-            ],
-        ]);
-
-        $this->commandTester->execute([
-            '--yaml-path' => $yamlPath,
-            '--force' => true,
-        ]);
-
-        $this->assertTableExists('users');
-        $this->assertTableExists('posts');
-        $this->assertCommandSucceeded();
-    }
-
-    // ==========================================
-    // PHP Attribute Configuration Tests
-    // ==========================================
-
-    #[Test]
-    public function it_creates_table_from_php_attributes(): void
-    {
-        $phpPath = $this->getPhpFixturePath();
-
-        $this->commandTester->execute([
-            '--path' => $phpPath,
-            '--namespace' => 'Tests\\Fixtures\\Schemas',
-            '--force' => true,
-        ]);
-
-        $this->assertTableExists('users');
-        $this->assertColumnExists('users', 'id');
-        $this->assertColumnExists('users', 'email');
-        $this->assertCommandSucceeded();
-    }
-
-    #[Test]
-    public function it_adds_column_from_php_attributes(): void
-    {
-        $this->createTable('users', [
-            'id' => 'BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY',
-        ]);
-
-        $phpPath = $this->getPhpFixturePath();
-
-        $this->commandTester->execute([
-            '--path' => $phpPath,
-            '--namespace' => 'Tests\\Fixtures\\Schemas',
-            '--force' => true,
-        ]);
-
-        $this->assertColumnExists('users', 'email');
-        $this->assertColumnExists('users', 'name');
-        $this->assertCommandSucceeded();
-    }
-
-    #[Test]
-    public function it_modifies_column_from_php_attributes(): void
-    {
-        $this->createTable('users', [
-            'id' => 'BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY',
-            'email' => 'VARCHAR(100) NOT NULL',
-            'name' => 'VARCHAR(100) NOT NULL',
-            'created_at' => 'TIMESTAMP NULL',
-            'updated_at' => 'TIMESTAMP NULL',
-        ]);
-
-        $phpPath = $this->getPhpFixturePath();
-
-        $this->commandTester->execute([
-            '--path' => $phpPath,
-            '--namespace' => 'Tests\\Fixtures\\Schemas',
-            '--force' => true,
-        ]);
-
-        $this->assertColumnType('users', 'email', 'varchar(255)');
-        $this->assertCommandSucceeded();
-    }
-
-    // ==========================================
-    // Combined YAML + PHP Tests
-    // ==========================================
-
-    #[Test]
-    public function it_combines_yaml_and_php_schemas(): void
-    {
-        $yamlPath = $this->createYamlFixture('posts', [
-            'columns' => [
-                'id' => ['type' => 'bigint', 'unsigned' => true, 'auto_increment' => true, 'primary' => true],
-                'title' => ['type' => 'varchar', 'length' => 255],
-            ],
-        ]);
-
-        $phpPath = $this->getPhpFixturePath();
-
-        $this->commandTester->execute([
-            '--path' => $phpPath,
-            '--yaml-path' => $yamlPath,
-            '--namespace' => 'Tests\\Fixtures\\Schemas',
-            '--force' => true,
-        ]);
-
-        $this->assertTableExists('users');  // From PHP
-        $this->assertTableExists('posts');  // From YAML
-        $this->assertCommandSucceeded();
-    }
-
-    // ==========================================
-    // Dry Run Tests
-    // ==========================================
-
-    #[Test]
-    public function it_shows_sql_without_executing_in_dry_run_mode(): void
-    {
-        $yamlPath = $this->createYamlFixture('users', [
-            'columns' => [
-                'id' => ['type' => 'bigint', 'unsigned' => true, 'auto_increment' => true, 'primary' => true],
-                'email' => ['type' => 'varchar', 'length' => 255],
-            ],
-        ]);
-
-        $this->commandTester->execute([
-            '--yaml-path' => $yamlPath,
-            '--dry-run' => true,
-        ]);
-
-        $output = $this->commandTester->getDisplay();
-
-        $this->assertStringContainsString('CREATE TABLE', $output);
-        $this->assertTableDoesNotExist('users');
-        $this->assertCommandSucceeded();
-    }
-
-    #[Test]
-    public function it_displays_no_changes_message_when_schema_matches(): void
-    {
-        $this->createTable('users', [
-            'id' => 'BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY',
-            'email' => 'VARCHAR(255) NOT NULL',
-        ]);
-
-        $yamlPath = $this->createYamlFixture('users', [
-            'columns' => [
-                'id' => ['type' => 'bigint', 'unsigned' => true, 'auto_increment' => true, 'primary' => true],
-                'email' => ['type' => 'varchar', 'length' => 255, 'nullable' => false],
-            ],
-        ]);
-
-        $this->commandTester->execute([
-            '--yaml-path' => $yamlPath,
-            '--force' => true,
-        ]);
-
-        $output = $this->commandTester->getDisplay();
-
-        $this->assertStringContainsString('up to date', $output);
-        $this->assertCommandSucceeded();
-    }
-
-    // ==========================================
-    // Confirmation Tests
-    // ==========================================
-
-    #[Test]
-    public function it_requires_confirmation_without_force_flag(): void
-    {
-        $yamlPath = $this->createYamlFixture('users', [
-            'columns' => [
-                'id' => ['type' => 'bigint', 'unsigned' => true, 'auto_increment' => true, 'primary' => true],
-            ],
-        ]);
-
-        $this->commandTester->setInputs(['no']);
-
-        $this->commandTester->execute([
-            '--yaml-path' => $yamlPath,
-        ]);
-
-        $this->assertTableDoesNotExist('users');
-    }
-
-    #[Test]
-    public function it_executes_when_user_confirms(): void
-    {
-        $yamlPath = $this->createYamlFixture('users', [
-            'columns' => [
-                'id' => ['type' => 'bigint', 'unsigned' => true, 'auto_increment' => true, 'primary' => true],
-            ],
-        ]);
-
-        $this->commandTester->setInputs(['yes']);
-
-        $this->commandTester->execute([
-            '--yaml-path' => $yamlPath,
-        ]);
-
-        $this->assertTableExists('users');
-        $this->assertCommandSucceeded();
-    }
-
-    // ==========================================
-    // Error Handling Tests
-    // ==========================================
-
-    #[Test]
-    public function it_displays_warning_when_no_schemas_found(): void
-    {
-        $emptyPath = sys_get_temp_dir() . '/atlas_empty_' . uniqid();
-        mkdir($emptyPath);
-
-        $this->commandTester->execute([
-            '--yaml-path' => $emptyPath,
-        ]);
-
-        $output = $this->commandTester->getDisplay();
-
-        $this->assertStringContainsString('No schema definitions found', $output);
-
-        rmdir($emptyPath);
-    }
-
-    #[Test]
-    public function it_handles_invalid_yaml_gracefully(): void
-    {
-        $yamlPath = $this->getYamlFixturePath();
-        file_put_contents("{$yamlPath}/invalid.schema.yaml", "invalid: yaml: content: [");
-
-        $this->commandTester->execute([
-            '--yaml-path' => $yamlPath,
-            '--force' => true,
-        ]);
-
-        $this->assertEquals(1, $this->commandTester->getStatusCode());
-    }
-
-    #[Test]
-    public function it_reports_duplicate_table_definitions(): void
-    {
-        $yamlPath = $this->getYamlFixturePath();
-
-        $this->createYamlFixtureFile($yamlPath, 'users1.schema.yaml', [
-            'tables' => [
-                'users' => [
-                    'columns' => [
-                        'id' => ['type' => 'bigint', 'primary' => true],
-                    ],
-                ],
-            ],
-        ]);
-
-        $this->createYamlFixtureFile($yamlPath, 'users2.schema.yaml', [
-            'tables' => [
-                'users' => [
-                    'columns' => [
-                        'id' => ['type' => 'bigint', 'primary' => true],
-                    ],
-                ],
-            ],
-        ]);
-
-        $this->commandTester->execute([
-            '--yaml-path' => $yamlPath,
-            '--force' => true,
-        ]);
-
-        $output = $this->commandTester->getDisplay();
-
-        $this->assertStringContainsString('Duplicate table', $output);
-        $this->assertEquals(1, $this->commandTester->getStatusCode());
-    }
-
-    // ==========================================
-    // Connection Tests
-    // ==========================================
-
-    #[Test]
-    public function it_uses_specified_connection(): void
-    {
-        $yamlPath = $this->createYamlFixture('users', [
-            'columns' => [
-                'id' => ['type' => 'bigint', 'unsigned' => true, 'auto_increment' => true, 'primary' => true],
-            ],
-        ]);
-
-        $this->commandTester->execute([
-            '--yaml-path' => $yamlPath,
-            '--connection' => 'default',
-            '--force' => true,
-        ]);
-
-        $this->assertTableExists('users');
-        $this->assertCommandSucceeded();
-    }
-
-    // ==========================================
-    // Helper Methods
-    // ==========================================
-
-    protected function createConnectionManager(): ConnectionManager
-    {
-        $config = [
-            'default' => [
-                'driver' => 'mysql',
-                'host' => getenv('DB_HOST') ?: '127.0.0.1',
-                'port' => getenv('DB_PORT') ?: 3306,
-                'database' => getenv('DB_DATABASE') ?: 'atlas_test',
-                'username' => getenv('DB_USERNAME') ?: 'root',
-                'password' => getenv('DB_PASSWORD') ?: '',
-            ],
+        $changes = [
+            'new_tables' => [],
+            'dropped_tables' => [],
+            'modified_tables' => [],
         ];
 
-        return new ConnectionManager($config);
-    }
+        $comparator = new TableComparator($analyzer);
 
-    protected function resetDatabase(): void
-    {
-        $tables = $this->pdo->query("SHOW TABLES")->fetchAll(\PDO::FETCH_COLUMN);
+        // find new and modified tables
+        foreach ($codeSchemas as $tableName => $codeTable) {
+            if (! isset($dbSchemas[$tableName])) {
+                $changes['new_tables'][$tableName] = $codeTable;
+            } else {
+                $diff = $comparator->compare($dbSchemas[$tableName], $codeTable);
 
-        $this->pdo->exec("SET FOREIGN_KEY_CHECKS = 0");
-
-        foreach ($tables as $table) {
-            $this->pdo->exec("DROP TABLE IF EXISTS `{$table}`");
+                if (! $diff->isEmpty()) {
+                    $changes['modified_tables'][$tableName] = $diff;
+                }
+            }
         }
 
-        $this->pdo->exec("SET FOREIGN_KEY_CHECKS = 1");
-
-        $this->cleanupYamlFixtures();
-    }
-
-    protected function createTable(string $name, array $columns): void
-    {
-        $columnSql = [];
-
-        foreach ($columns as $columnName => $definition) {
-            $columnSql[] = "`{$columnName}` {$definition}";
+        // find dropped tables
+        $codeTableNames = array_map(fn($t) => $t->tableName, $codeSchemas);
+        foreach ($dbSchemas as $tableName => $dbTable) {
+            if (! in_array($tableName, $codeTableNames, true)) {
+                $changes['dropped_tables'][$tableName] = $dbTable;
+            }
         }
 
-        $sql = "CREATE TABLE `{$name}` (" . implode(', ', $columnSql) . ")";
-
-        $this->pdo->exec($sql);
+        return $changes;
     }
 
-    protected function getYamlFixturePath(): string
+    protected function noChangesDetected(array $changes): bool
     {
-        $path = sys_get_temp_dir() . '/atlas_yaml_fixtures_' . uniqid();
+        return empty($changes['new_tables'])
+            && empty($changes['dropped_tables'])
+            && empty($changes['modified_tables']);
+    }
 
-        if (! is_dir($path)) {
-            mkdir($path, 0777, true);
+    protected function generateMigrationSql(array $changes, MySqlGrammar $grammar): array
+    {
+        $sql = [];
+
+        // New tables
+        foreach ($changes['new_tables'] as $tableName => $table) {
+            $sql[] = $grammar->createTable($table);
         }
 
-        return $path;
-    }
-
-    protected function getPhpFixturePath(): string
-    {
-        return __DIR__ . '/../../Fixtures/Schemas';
-    }
-
-    protected function createYamlFixture(string $tableName, array $tableDefinition): string
-    {
-        $path = $this->getYamlFixturePath();
-
-        $yaml = [
-            'tables' => [
-                $tableName => $tableDefinition,
-            ],
-        ];
-
-        $this->createYamlFixtureFile($path, "{$tableName}.schema.yaml", $yaml);
-
-        return $path;
-    }
-
-    protected function createYamlFixtureFile(string $path, string $filename, array $content): void
-    {
-        if (! is_dir($path)) {
-            mkdir($path, 0777, true);
+        // Modified tables
+        foreach ($changes['modified_tables'] as $tableName => $diff) {
+            $statements = $grammar->generateAlter($diff);
+            $sql = array_merge($sql, $statements);
         }
 
-        $yaml = \Symfony\Component\Yaml\Yaml::dump($content, 10, 2);
-
-        file_put_contents("{$path}/{$filename}", $yaml);
-    }
-
-    protected function cleanupYamlFixtures(): void
-    {
-        $pattern = sys_get_temp_dir() . '/atlas_yaml_fixtures_*';
-
-        foreach (glob($pattern) as $dir) {
-            $this->removeDirectory($dir);
+        // Dropped tables
+        foreach ($changes['dropped_tables'] as $tableName => $table) {
+            $sql[] = "DROP TABLE `{$tableName}`;";
         }
+
+        return $sql;
     }
 
-    protected function removeDirectory(string $path): void
+    protected function displayResults(SymfonyStyle $io, array $sql, InputInterface $input): void
     {
-        if (! is_dir($path)) {
+        $io->section('Migration SQL');
+
+        foreach ($sql as $statement) {
+            $io->writeln($statement . ';');
+        }
+
+        $io->newLine();
+        $io->note(sprintf('Generated %d SQL statement(s)', count($sql)));
+
+        $this->saveToFileIfRequested($io, $sql, $input);
+    }
+
+    protected function saveToFileIfRequested(SymfonyStyle $io, array $sql, InputInterface $input): void
+    {
+        $outputPath = $input->getOption('output');
+
+        if ($outputPath === null) {
             return;
         }
 
-        $files = array_diff(scandir($path), ['.', '..']);
-
-        foreach ($files as $file) {
-            $filePath = "{$path}/{$file}";
-
-            is_dir($filePath)
-                ? $this->removeDirectory($filePath)
-                : unlink($filePath);
-        }
-
-        rmdir($path);
+        $this->saveSqlToFile($outputPath, $sql);
+        $io->success("SQL saved to: {$outputPath}");
     }
 
-    // ==========================================
-    // Assertion Helpers
-    // ==========================================
-
-    protected function assertCommandSucceeded(): void
+    protected function saveSqlToFile(string $path, array $sql): void
     {
-        $this->assertEquals(0, $this->commandTester->getStatusCode());
-    }
-
-    protected function assertTableExists(string $table): void
-    {
-        $result = $this->pdo->query("SHOW TABLES LIKE '{$table}'")->fetch();
-
-        $this->assertNotFalse($result, "Table '{$table}' should exist");
-    }
-
-    protected function assertTableDoesNotExist(string $table): void
-    {
-        $result = $this->pdo->query("SHOW TABLES LIKE '{$table}'")->fetch();
-
-        $this->assertFalse($result, "Table '{$table}' should not exist");
-    }
-
-    protected function assertColumnExists(string $table, string $column): void
-    {
-        $result = $this->pdo->query("SHOW COLUMNS FROM `{$table}` LIKE '{$column}'")->fetch();
-
-        $this->assertNotFalse($result, "Column '{$column}' should exist in table '{$table}'");
-    }
-
-    protected function assertColumnType(string $table, string $column, string $expectedType): void
-    {
-        $result = $this->pdo->query("SHOW COLUMNS FROM `{$table}` LIKE '{$column}'")->fetch();
-
-        $this->assertNotFalse($result, "Column '{$column}' should exist in table '{$table}'");
-        $this->assertStringContainsString(
-            strtolower($expectedType),
-            strtolower($result['Type']),
-            "Column '{$column}' should have type '{$expectedType}'"
-        );
-    }
-
-    protected function assertIndexExists(string $table, string $column): void
-    {
-        $result = $this->pdo->query("SHOW INDEX FROM `{$table}` WHERE Column_name = '{$column}'")->fetch();
-
-        $this->assertNotFalse($result, "Index on column '{$column}' should exist in table '{$table}'");
-    }
-
-    protected function assertForeignKeyExists(string $table, string $column): void
-    {
-        $sql = "
-            SELECT * FROM information_schema.KEY_COLUMN_USAGE
-            WHERE TABLE_SCHEMA = DATABASE()
-            AND TABLE_NAME = '{$table}'
-            AND COLUMN_NAME = '{$column}'
-            AND REFERENCED_TABLE_NAME IS NOT NULL
-        ";
-
-        $result = $this->pdo->query($sql)->fetch();
-
-        $this->assertNotFalse($result, "Foreign key on column '{$column}' should exist in table '{$table}'");
+        $content = implode(";\n", $sql) . ";\n";
+        file_put_contents($path, $content);
     }
 }

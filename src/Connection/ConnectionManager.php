@@ -5,8 +5,8 @@ declare(strict_types=1);
 namespace Atlas\Connection;
 
 use Atlas\Database\DatabaseDriver;
-use Atlas\Database\MySqlDriver;
-use Atlas\Database\MySqlTypeNormalizer;
+use Atlas\Database\Drivers\MySqlDriver;
+use Atlas\Database\Drivers\MySqlTypeNormalizer;
 use Atlas\Database\TypeNormalizerInterface;
 use Atlas\Exceptions\ConnectionException;
 use Atlas\Schema\Comparison\SchemaComparator;

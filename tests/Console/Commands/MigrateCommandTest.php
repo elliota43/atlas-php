@@ -126,21 +126,40 @@ final class MigrateCommandTest extends TestCase
     #[Test]
     public function it_creates_foreign_key_from_yaml_schema(): void
     {
+        // First, create the users table that will be referenced
         $this->createTable('users', [
             'id' => 'BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY',
         ]);
 
-        $yamlPath = $this->createYamlFixture('posts', [
-            'columns' => [
-                'id' => ['type' => 'bigint', 'unsigned' => true, 'auto_increment' => true, 'primary' => true],
-                'user_id' => [
-                    'type' => 'bigint',
-                    'unsigned' => true,
-                    'nullable' => false,
-                    'foreign_key' => [
-                        'table' => 'users',
-                        'column' => 'id',
-                        'on_delete' => 'cascade',
+        $yamlPath = $this->getYamlFixturePath();
+
+        // Create users table YAML (to prevent it from being dropped)
+        $this->createYamlFixtureFile($yamlPath, 'users.schema.yaml', [
+            'tables' => [
+                'users' => [
+                    'columns' => [
+                        'id' => ['type' => 'bigint', 'unsigned' => true, 'auto_increment' => true, 'primary' => true],
+                    ],
+                ],
+            ],
+        ]);
+
+        // Create posts table YAML with FK to users
+        $this->createYamlFixtureFile($yamlPath, 'posts.schema.yaml', [
+            'tables' => [
+                'posts' => [
+                    'columns' => [
+                        'id' => ['type' => 'bigint', 'unsigned' => true, 'auto_increment' => true, 'primary' => true],
+                        'user_id' => [
+                            'type' => 'bigint',
+                            'unsigned' => true,
+                            'nullable' => false,
+                            'foreign_key' => [
+                                'table' => 'users',
+                                'column' => 'id',
+                                'on_delete' => 'cascade',
+                            ],
+                        ],
                     ],
                 ],
             ],
@@ -148,6 +167,7 @@ final class MigrateCommandTest extends TestCase
 
         $this->executeCommand(['--yaml-path' => $yamlPath, '--force' => true]);
 
+        $this->assertTableExists('users');
         $this->assertTableExists('posts');
         $this->assertForeignKeyExists('posts', 'user_id');
         $this->assertCommandSucceeded();
@@ -198,7 +218,6 @@ final class MigrateCommandTest extends TestCase
 
         $this->executeCommand([
             '--path' => $phpPath,
-            '--namespace' => 'Tests\\Fixtures\\Schemas',
             '--force' => true,
         ]);
 
@@ -219,7 +238,6 @@ final class MigrateCommandTest extends TestCase
 
         $this->executeCommand([
             '--path' => $phpPath,
-            '--namespace' => 'Tests\\Fixtures\\Schemas',
             '--force' => true,
         ]);
 
@@ -243,7 +261,6 @@ final class MigrateCommandTest extends TestCase
 
         $this->executeCommand([
             '--path' => $phpPath,
-            '--namespace' => 'Tests\\Fixtures\\Schemas',
             '--force' => true,
         ]);
 
@@ -270,7 +287,6 @@ final class MigrateCommandTest extends TestCase
         $this->executeCommand([
             '--path' => $phpPath,
             '--yaml-path' => $yamlPath,
-            '--namespace' => 'Tests\\Fixtures\\Schemas',
             '--force' => true,
         ]);
 
@@ -326,18 +342,26 @@ final class MigrateCommandTest extends TestCase
     // ==========================================
 
     #[Test]
-    public function it_requires_confirmation_without_force_flag(): void
+    public function it_requires_confirmation_for_destructive_changes(): void
     {
+        // Create a table that will be DROPPED (destructive)
+        $this->createTable('old_table', [
+            'id' => 'BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY',
+        ]);
+
+        // Define schema WITHOUT old_table - causing it to be marked for DROP
         $yamlPath = $this->createYamlFixture('users', [
             'columns' => [
                 'id' => ['type' => 'bigint', 'unsigned' => true, 'auto_increment' => true, 'primary' => true],
             ],
         ]);
 
-        $this->commandTester->setInputs(['no']);
+        // Input 'n' to skip the destructive change
+        $this->commandTester->setInputs(['n']);
         $this->executeCommand(['--yaml-path' => $yamlPath]);
 
-        $this->assertTableDoesNotExist('users');
+        // old_table should still exist because user said 'no' to drop
+        $this->assertTableExists('old_table');
     }
 
     #[Test]
@@ -367,7 +391,7 @@ final class MigrateCommandTest extends TestCase
 
         $this->executeCommand(['--yaml-path' => $emptyPath]);
 
-        $this->assertStringContainsString('No schema definitions found', $this->getOutput());
+        $this->assertStringContainsString('No schemas found', $this->getOutput());
 
         $this->removeDirectory($emptyPath);
     }
@@ -462,9 +486,9 @@ final class MigrateCommandTest extends TestCase
                 'driver' => 'mysql',
                 'host' => getenv('DB_HOST') ?: '127.0.0.1',
                 'port' => getenv('DB_PORT') ?: 3306,
-                'database' => getenv('DB_DATABASE') ?: 'atlas_test',
+                'database' => getenv('DB_DATABASE') ?: 'test_schema',
                 'username' => getenv('DB_USERNAME') ?: 'root',
-                'password' => getenv('DB_PASSWORD') ?: '',
+                'password' => getenv('DB_PASSWORD') ?: 'root',
             ],
         ]);
     }

@@ -9,6 +9,7 @@ use Atlas\Console\Commands\DiffCommand;
 use Atlas\Schema\Definition\ColumnDefinition;
 use Atlas\Schema\Definition\TableDefinition;
 use Atlas\Schema\Loader\SchemaLoader;
+use PHPUnit\Framework\Attributes\Test;
 use PHPUnit\Framework\TestCase;
 use Symfony\Component\Console\Application;
 use Symfony\Component\Console\Tester\CommandTester;
@@ -17,10 +18,14 @@ final class DiffCommandTest extends TestCase
 {
     private CommandTester $commandTester;
     private ConnectionManager $connectionManager;
+    private \PDO $pdo;
 
     protected function setUp(): void
     {
         $this->connectionManager = $this->createConnectionManager();
+        $this->pdo = $this->connectionManager->connection('default');
+
+        $this->resetDatabase();
 
         $command = new DiffCommand($this->connectionManager);
 
@@ -28,6 +33,24 @@ final class DiffCommandTest extends TestCase
         $application->add($command);
 
         $this->commandTester = new CommandTester($command);
+    }
+
+    protected function tearDown(): void
+    {
+        $this->resetDatabase();
+    }
+
+    protected function resetDatabase(): void
+    {
+        $tables = $this->pdo->query('SHOW TABLES')->fetchAll(\PDO::FETCH_COLUMN);
+
+        $this->pdo->exec('SET FOREIGN_KEY_CHECKS = 0');
+
+        foreach ($tables as $table) {
+            $this->pdo->exec("DROP TABLE IF EXISTS `{$table}`");
+        }
+
+        $this->pdo->exec('SET FOREIGN_KEY_CHECKS = 1');
     }
 
     #[Test]
@@ -212,11 +235,11 @@ final class DiffCommandTest extends TestCase
             ],
             'testing' => [
                 'driver' => 'mysql',
-                'host' => '127.0.0.1',
-                'port' => '3306',
-                'database' => 'atlas_test',
-                'username' => 'root',
-                'password' => '',
+                'host' => getenv('DB_HOST') ?: '127.0.0.1',
+                'port' => getenv('DB_PORT') ?: '3306',
+                'database' => getenv('DB_DATABASE') ?: 'atlas_test',
+                'username' => getenv('DB_USERNAME') ?: 'root',
+                'password' => getenv('DB_PASSWORD') ?: '',
             ],
         ];
 

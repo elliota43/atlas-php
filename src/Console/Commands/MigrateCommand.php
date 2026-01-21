@@ -6,6 +6,7 @@ use Atlas\Analysis\DestructivenessLevel;
 use Atlas\Analysis\MySqlDestructiveChangeAnalyzer;
 use Atlas\Changes\TableChanges;
 use Atlas\Comparison\TableComparator;
+use Atlas\Connection\ConnectionManager;
 use Atlas\Database\Drivers\MySqlDriver;
 use Atlas\Schema\Grammars\MySqlGrammar;
 use Atlas\Database\Drivers\MySqlTypeNormalizer;
@@ -25,47 +26,52 @@ class MigrateCommand extends Command
     protected static $defaultName = 'schema:migrate';
     protected static $defaultDescription = 'Migrate database schema to match code definitions.';
 
+    public function __construct(
+        private ?ConnectionManager $connectionManager = null,
+    ) {
+        parent::__construct('schema:migrate');
+    }
+
     protected function configure(): void
     {
         $this
             ->addOption('path', 'p', InputOption::VALUE_REQUIRED, 'Path to schema classes', 'src')
             ->addOption('dry-run', null, InputOption::VALUE_NONE, 'Show changes without executing')
             ->addOption('force', 'f', InputOption::VALUE_NONE, 'Skip all confirmation prompts')
-            ->addOption('manual-all', 'm', InputOption::VALUE_NONE, 'Prompt for approval on ALL changes, including safe ones');
+            ->addOption('manual-all', 'm', InputOption::VALUE_NONE, 'Prompt for approval on ALL changes, including safe ones')
+            ->addOption('yaml-path', null, InputOption::VALUE_REQUIRED, 'Path to YAML schema files')
+            ->addOption('connection', 'c', InputOption::VALUE_REQUIRED, 'Connection name to use', 'default');
     }
 
     protected function execute(InputInterface $input, OutputInterface $output): int
     {
         $io = new SymfonyStyle($input, $output);
+        $connectionName = $input->getOption('connection');
 
-        // Connect to DB
-        $pdo = $this->createDatabaseConnection();
-        $driver = new MySqlDriver($pdo);
-        $grammar = new MySqlGrammar();
-        $normalizer = new MySqlTypeNormalizer();
+        // Get database dependencies
+        $pdo = $this->getConnection($connectionName);
+        $driver = $this->getDriver($connectionName, $pdo);
+        $grammar = $this->getGrammar($connectionName);
+        $normalizer = $this->getNormalizer($connectionName);
         $parser = new SchemaParser($normalizer);
         $analyzer = new MySqlDestructiveChangeAnalyzer();
 
-        // Find and parse schema classes
-        $io->section('Discovering Schema Classes');
-        $path = $input->getOption('path');
-        $finder = new ClassFinder();
-        $schemaClasses = $finder->findSchemaClasses($path);
+        // Discover schemas (YAML or PHP)
+        $io->section('Discovering Schemas');
 
-        if (empty($schemaClasses)) {
-            $io->error("No schema classes found in {$path}");
+        try {
+            $codeSchemas = $this->discoverSchemas($input, $io, $parser, $normalizer);
+        } catch (\Atlas\Exceptions\SchemaException $e) {
+            $io->error($e->getMessage());
             return Command::FAILURE;
         }
 
-        $io->text(sprintf('Found %d schema class(es)', count($schemaClasses)));
-
-        // Parse code schemas
-        $io->section('Parsing Code Schemas');
-        $codeSchemas = [];
-        foreach ($schemaClasses as $class) {
-            $codeSchemas[$class] = $parser->parse($class);
-            $io->text("  ✓ Parsed {$class}");
+        if (empty($codeSchemas)) {
+            $io->error('No schemas found');
+            return Command::FAILURE;
         }
+
+        $io->text(sprintf('Found %d schema(s)', count($codeSchemas)));
 
         // Introspect DB
         $io->section('Introspecting Database');
@@ -285,35 +291,29 @@ class MigrateCommand extends Command
 
     protected function executeMigration(PDO $pdo, array $changes, MySqlGrammar $grammar, SymfonyStyle $io): void
     {
-        $pdo->beginTransaction();
+        // Note: MySQL DDL statements auto-commit, so transactions don't work for schema changes
+        // We execute each statement individually
 
-        try {
-            // Create new tables
-            foreach ($changes['new_tables'] as $table) {
-                $sql = $grammar->createTable($table);
-                $pdo->exec($sql);
-                $io->text("  ✓ Created table `{$table->tableName}`");
+        // Create new tables
+        foreach ($changes['new_tables'] as $table) {
+            $sql = $grammar->createTable($table);
+            $pdo->exec($sql);
+            $io->text("  ✓ Created table `{$table->tableName}`");
+        }
+
+        // Modify existing tables
+        foreach ($changes['modified_tables'] as $diff) {
+            $alterStatements = $grammar->generateAlter($diff);
+            foreach ($alterStatements as $stmt) {
+                $pdo->exec($stmt);
             }
+            $io->text("  ✓ Modified table `{$diff->tableName}`");
+        }
 
-            // Modify existing tables
-            foreach ($changes['modified_tables'] as $diff) {
-                $alterStatements = $grammar->generateAlter($diff);
-                foreach ($alterStatements as $stmt) {
-                    $pdo->exec($stmt);
-                }
-                $io->text("  ✓ Modified table `{$diff->tableName}`");
-            }
-
-            // Drop tables
-            foreach ($changes['dropped_tables'] as $tableName => $table) {
-                $pdo->exec("DROP TABLE `{$tableName}`");
-                $io->text("  ✓ Dropped table `{$tableName}`");
-            }
-
-            $pdo->commit();
-        } catch (\Exception $e) {
-            $pdo->rollBack();
-            throw $e;
+        // Drop tables
+        foreach ($changes['dropped_tables'] as $tableName => $table) {
+            $pdo->exec("DROP TABLE `{$tableName}`");
+            $io->text("  ✓ Dropped table `{$tableName}`");
         }
     }
 
@@ -340,78 +340,68 @@ class MigrateCommand extends Command
             fn($c) => $c['level'] !== DestructivenessLevel::SAFE
         );
 
-        $pdo->beginTransaction();
+        // Note: MySQL DDL statements auto-commit, so no transactions
 
-        try {
-            // Execute safe changes
-            if (!empty($safeChanges)) {
-                if ($manualAll) {
-                    // Manual mode: prompt for each safe change
-                    foreach ($safeChanges as $change) {
-                        $result = $this->executeChangeWithPrompt($pdo, $io, $change, $grammar);
-                        if ($result === 'aborted') {
-                            $io->warning('Migration aborted by user');
-                            $pdo->rollBack();
-                            return;
-                        }
-                    }
-                } else {
-                    // Auto mode: execute with notifications
-                    $io->section('Applying Safe Changes');
-                    foreach ($safeChanges as $change) {
-                        $pdo->exec($change['sql']);
-                        $io->text("  ✓ " . $change['description']);
-                    }
-                    $io->newLine();
-                }
-            }
-
-            // Execute destructive changes with prompts
-            if (!empty($destructiveChanges)) {
-                $io->section('Destructive Changes - Manual Approval Required');
-                $io->text(sprintf(
-                    'Found %d destructive change(s) requiring your approval',
-                    count($destructiveChanges)
-                ));
-                $io->newLine();
-
-                $skippedChanges = [];
-
-                foreach ($destructiveChanges as $index => $change) {
-                    // Display progress
-                    $io->text(sprintf(
-                        '<fg=cyan>[Change %d of %d]</>',
-                        $index + 1,
-                        count($destructiveChanges)
-                    ));
-
+        // Execute safe changes
+        if (!empty($safeChanges)) {
+            if ($manualAll) {
+                // Manual mode: prompt for each safe change
+                foreach ($safeChanges as $change) {
                     $result = $this->executeChangeWithPrompt($pdo, $io, $change, $grammar);
-
-                    if ($result === 'skipped') {
-                        $skippedChanges[] = $change;
-                    } elseif ($result === 'aborted') {
+                    if ($result === 'aborted') {
                         $io->warning('Migration aborted by user');
-                        $pdo->rollBack();
                         return;
                     }
+                }
+            } else {
+                // Auto mode: execute with notifications
+                $io->section('Applying Safe Changes');
+                foreach ($safeChanges as $change) {
+                    $pdo->exec($change['sql']);
+                    $io->text("  ✓ " . $change['description']);
+                }
+                $io->newLine();
+            }
+        }
 
-                    $io->newLine();
+        // Execute destructive changes with prompts
+        if (!empty($destructiveChanges)) {
+            $io->section('Destructive Changes - Manual Approval Required');
+            $io->text(sprintf(
+                'Found %d destructive change(s) requiring your approval',
+                count($destructiveChanges)
+            ));
+            $io->newLine();
+
+            $skippedChanges = [];
+
+            foreach ($destructiveChanges as $index => $change) {
+                // Display progress
+                $io->text(sprintf(
+                    '<fg=cyan>[Change %d of %d]</>',
+                    $index + 1,
+                    count($destructiveChanges)
+                ));
+
+                $result = $this->executeChangeWithPrompt($pdo, $io, $change, $grammar);
+
+                if ($result === 'skipped') {
+                    $skippedChanges[] = $change;
+                } elseif ($result === 'aborted') {
+                    $io->warning('Migration aborted by user');
+                    return;
                 }
 
-                // Show summary of skipped changes
-                if (!empty($skippedChanges)) {
-                    $io->section('Skipped Changes Summary');
-                    foreach ($skippedChanges as $change) {
-                        $io->text("  ⊘ {$change['description']}");
-                    }
-                }
+                $io->newLine();
             }
 
-            $pdo->commit();
-
-        } catch (\Exception $e) {
-            $pdo->rollBack();
-            throw $e;
+            // Show summary of skipped changes
+            if (!empty($skippedChanges)) {
+                $io->section('Skipped Changes Summary');
+                foreach ($skippedChanges as $change) {
+                    $io->text("  ⊘ {$change['description']}");
+                }
+            }
         }
     }
 
@@ -709,6 +699,101 @@ class MigrateCommand extends Command
         } catch (\PDOException $e) {
             $io->warning("Could not preview data: " . $e->getMessage());
         }
+    }
+
+    // ==========================================
+    // Connection & Dependency Resolution
+    // ==========================================
+
+    protected function getConnection(string $connectionName): PDO
+    {
+        if ($this->connectionManager) {
+            return $this->connectionManager->connection($connectionName);
+        }
+
+        return $this->createDatabaseConnection();
+    }
+
+    protected function getDriver(string $connectionName, PDO $pdo): \Atlas\Database\Drivers\MySqlDriver
+    {
+        // TODO: Use ConnectionManager to get driver based on connection type
+        return new MySqlDriver($pdo);
+    }
+
+    protected function getGrammar(string $connectionName): MySqlGrammar
+    {
+        // TODO: Use ConnectionManager to get grammar based on connection type
+        return new MySqlGrammar();
+    }
+
+    protected function getNormalizer(string $connectionName): MySqlTypeNormalizer
+    {
+        // TODO: Use ConnectionManager to get normalizer based on connection type
+        return new MySqlTypeNormalizer();
+    }
+
+    protected function discoverSchemas(
+        InputInterface $input,
+        SymfonyStyle $io,
+        SchemaParser $parser,
+        MySqlTypeNormalizer $normalizer
+    ): array {
+        $yamlPath = $input->getOption('yaml-path');
+        $phpPath = $input->getOption('path');
+
+        $schemas = [];
+
+        // Discover YAML schemas
+        if ($yamlPath) {
+            $io->text("Scanning YAML path: {$yamlPath}");
+            $yamlSchemas = $this->discoverYamlSchemas($yamlPath, $normalizer);
+            foreach ($yamlSchemas as $tableName => $definition) {
+                $schemas[$tableName] = $definition;
+                $io->text("  ✓ Loaded YAML: {$tableName}");
+            }
+        }
+
+        // Discover PHP schemas
+        // Scan PHP path if: (a) no YAML path given, or (b) explicitly provided with --path
+        $explicitlyProvidedPath = $input->getOption('path') !== 'src';
+        $shouldScanPhp = ! $yamlPath || $explicitlyProvidedPath;
+
+        if ($shouldScanPhp && $phpPath) {
+            $io->text("Scanning PHP path: {$phpPath}");
+            $finder = new ClassFinder();
+            $schemaClasses = $finder->findInDirectory($phpPath);
+
+            foreach ($schemaClasses as $class) {
+                $definition = $parser->parse($class);
+                $schemas[$definition->tableName] = $definition;
+                $io->text("  ✓ Parsed PHP: {$class}");
+            }
+        }
+
+        return $schemas;
+    }
+
+    protected function discoverYamlSchemas(string $path, MySqlTypeNormalizer $normalizer): array
+    {
+        $yamlParser = new \Atlas\Schema\Parser\YamlSchemaParser($normalizer);
+        $finder = new \Atlas\Schema\Discovery\YamlSchemaFinder();
+
+        $files = $finder->findInDirectory($path);
+        $schemas = [];
+
+        foreach ($files as $file) {
+            $parsed = $yamlParser->parseFile($file);
+            foreach ($parsed as $tableName => $definition) {
+                if (isset($schemas[$tableName])) {
+                    throw new \Atlas\Exceptions\SchemaException(
+                        "Duplicate table definition: {$tableName}"
+                    );
+                }
+                $schemas[$tableName] = $definition;
+            }
+        }
+
+        return $schemas;
     }
 
     protected function createDatabaseConnection(): PDO

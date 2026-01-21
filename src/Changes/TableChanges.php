@@ -54,7 +54,9 @@ class TableChanges
             if ($level->isDestructive()) {
                 return true;
             }
-         }
+        }
+
+        return false;
     }
 
     /**
