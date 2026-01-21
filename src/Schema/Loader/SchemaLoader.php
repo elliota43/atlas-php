@@ -2,17 +2,20 @@
 
 namespace Atlas\Schema\Loader;
 
+use Atlas\Database\TypeNormalizerInterface;
 use Atlas\Schema\Parser\SchemaParser;
 use Atlas\Schema\Parser\YamlSchemaParser;
 use Atlas\Schema\Discovery\ClassFinder;
 use Atlas\Schema\Definition\TableDefinition;
 use Atlas\Exceptions\SchemaException;
+use Atlas\Schema\Discovery\YamlSchemaFinder;
 class SchemaLoader
 {
     public function __construct(
         private YamlSchemaParser $yamlParser,
         private SchemaParser $phpParser,
         private ClassFinder $classFinder,
+        private TypeNormalizerInterface $normalizer
     ) {}
 
     /**
@@ -40,6 +43,27 @@ class SchemaLoader
     private function loadFromYaml(string $path): array
     {
         return $this->yamlParser->parseFile($path);
+    }
+
+    /**
+     * Load schema definitions from YAML files in a directory.
+     *
+     * @param string $directory Root directory to search.
+     * @param string $pattern File pattern (default: *.schema.yaml)
+     * @return array<TableDefinition>
+     */
+    public function loadFromYamlDirectory(string $directory, string $pattern = '*.schema.yaml'): array
+    {
+        $finder = new YamlSchemaFinder();
+        $parser = new YamlSchemaParser($this->normalizer);
+
+        $files = $finder->findInDirectory($directory, $pattern);
+
+        if (empty($files)) {
+            return [];
+        }
+
+        return $parser->parseFiles($files);
     }
 
     /**
